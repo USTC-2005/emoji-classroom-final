@@ -30,12 +30,12 @@ export async function resetRouter() {
 export async function addDynamicRoutes() {
   const token = getToken()
 
-  // 没有token情况
+  // 未登录时只保留基础路由，避免提前请求用户菜单。
   if (isNullOrWhitespace(token)) {
     router.addRoute(EMPTY_ROUTE)
     return
   }
-  // 有token的情况
+  // 登录后从后端加载菜单和 API 权限，再转换为动态路由。
   const userStore = useUserStore()
   const permissionStore = usePermissionStore()
   !userStore.userId && (await userStore.getUserInfo())

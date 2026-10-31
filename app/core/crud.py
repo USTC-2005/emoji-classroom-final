@@ -11,6 +11,8 @@ UpdateSchemaType = TypeVar("UpdateSchemaType", bound=BaseModel)
 
 
 class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
+    """为简单资源提供统一的查询、分页、创建、更新和删除操作。"""
+
     def __init__(self, model: Type[ModelType]):
         self.model = model
 
@@ -18,6 +20,7 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         return await self.model.get(id=id)
 
     async def list(self, page: int, page_size: int, search: Q = Q(), order: list = []) -> Tuple[Total, List[ModelType]]:
+        # 先统计总数，再按页码计算 offset；筛选条件由调用方传入 Q。
         query = self.model.filter(search)
         return await query.count(), await query.offset((page - 1) * page_size).limit(page_size).order_by(*order)
 
@@ -31,6 +34,7 @@ class CRUDBase(Generic[ModelType, CreateSchemaType, UpdateSchemaType]):
         return obj
 
     async def update(self, id: int, obj_in: Union[UpdateSchemaType, Dict[str, Any]]) -> ModelType:
+        # 部分更新时只写入调用方提交的字段，避免覆盖其他数据。
         if isinstance(obj_in, Dict):
             obj_dict = obj_in
         else:

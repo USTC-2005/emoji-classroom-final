@@ -5,3 +5,4 @@
 """
 
 # TODO: 使用 Tortoise ORM 实现课堂业务实体。
+# 这里应承载 Course、ClassSession、ScheduleUser 和 EmojiRecord，供 A/C/D 模块共享。

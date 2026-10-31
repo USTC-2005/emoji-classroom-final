@@ -1,5 +1,6 @@
 import { request } from '@/utils'
 
+// 页面只调用这里的语义化方法，不直接拼接 Axios 请求。
 export default {
   login: (data) => request.post('/base/access_token', data, { noNeedToken: true }),
   getUserInfo: () => request.get('/base/userinfo'),

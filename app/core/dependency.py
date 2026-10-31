@@ -9,6 +9,7 @@ from app.settings import settings
 
 
 class AuthControl:
+    # 认证层负责确认当前用户身份，并把用户 ID 放入请求上下文。
     @classmethod
     async def is_authed(cls, token: str = Header(..., description="token验证")) -> Optional["User"]:
         try:
@@ -32,6 +33,7 @@ class AuthControl:
 
 
 class PermissionControl:
+    # 权限层根据 HTTP 方法和完整路径匹配角色拥有的 API 权限。
     @classmethod
     async def has_permission(cls, request: Request, current_user: User = Depends(AuthControl.is_authed)) -> None:
         if current_user.is_superuser:
