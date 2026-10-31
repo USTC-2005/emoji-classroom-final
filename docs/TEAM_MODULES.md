@@ -1,0 +1,44 @@
+# 表情符号课堂情绪检查器：模块认领清单
+
+本目录是在现有 Vue FastAPI Admin 骨架上新增的课堂业务边界。每位成员先认领模块，再补齐实现、测试和 API 文档。未完成模块不要接入 `app/api/v1/__init__.py`，避免影响现有管理端启动。
+
+## 成员 A：后端与数据库
+
+- `app/models/classroom.py`
+- `app/schemas/classroom.py`
+- `app/schemas/emoji.py`
+- `app/controllers/course.py`
+- `app/controllers/session.py`
+- `app/controllers/emoji.py`
+- 负责数据库迁移、课程/课堂/排课/EmojiRecord 模型和数据权限。
+
+## 成员 B：学生与教师客户端
+
+- `web/src/views/` 下新增学生 emoji、个人历史、教师课堂历史页面
+- `web/src/api/index.js` 增加课程、会话、emoji、教师查询接口
+- 负责学生注册、登录、修改密码、手动发送 emoji 和教师基础统计。
+
+## 成员 C：管理端与统计导出
+
+- `app/services/statistics.py`
+- `app/services/export.py`
+- `app/api/v1/dashboard/`
+- `app/api/v1/statistics/`
+- `app/api/v1/courses/`
+- `app/api/v1/sessions/`
+- 负责管理员课程/课堂/排课、实时看板、多维统计、CSV 导出。
+
+## 成员 D：AI 服务集成
+
+- `app/services/ai_ingest.py`
+- `app/api/v1/ai/`
+- 新增独立 `ai-service/` 目录，实现视频帧采样、人脸检测、情绪分类、置信度过滤和重试。
+- AI 记录必须带 `source=AI`、`confidence`、`session_id`，默认不保存原始图像或视频。
+
+## 集成约定
+
+1. API 前缀统一为 `/api/v1`，响应沿用现有 `Success/Fail` 格式。
+2. 每个模块至少提供一个单元测试和一个接口测试。
+3. 所有需要登录的接口使用 `DependAuth`；管理员接口使用 `DependPermission`，业务数据还要做教师/学生归属校验。
+4. AI 接口使用独立服务令牌，不接受学生 JWT。
+5. 合并前必须补充 OpenAPI 示例、数据库迁移和 README 使用说明。
