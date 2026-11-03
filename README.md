@@ -219,3 +219,252 @@ pnpm dev
             └── workbench  // 工作台页面
 ```
 
+## 情绪课堂模块（A）：后端与数据库
+
+本仓库在 vue-fastapi-admin 基础上新增课堂情绪业务。A 模块负责课程、课堂会话、排课和 Emoji 记录的数据模型、Schema、控制器、数据库迁移以及数据归属校验。
+
+### 数据模型
+
+| 表名 | 说明 | 关键约束 |
+| --- | --- | --- |
+| `course` | 课程，由教师负责 | `(name, teacher_id)` 唯一 |
+| `class_session` | 课堂会话，属于某门课程 | `end_time > start_time` |
+| `schedule_user` | 课堂排课关系 | `(session_id, user_id)` 唯一 |
+| `emoji_record` | 手动或 AI 生成的情绪记录 | `source` 为 `MANUAL`/`AI`，AI 必须带 0~1 的 `confidence`，手动不能带 `confidence` |
+
+`EmojiType` 支持：`HAPPY`、`SAD`、`ANGRY`、`SURPRISED`、`NEUTRAL`。
+
+### API 接口（前缀 `/api/v1`）
+
+除登录外，以下接口都需要登录，鉴权信息放在请求头 `token`（与前端 Axios 拦截器一致）。普通接口使用 `DependAuth`，并在控制器层做教师/学生归属校验。
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| GET | `/api/v1/courses` | 查询课程列表 |
+| POST | `/api/v1/courses` | 创建课程 |
+| PUT | `/api/v1/courses/{course_id}` | 更新课程 |
+| DELETE | `/api/v1/courses/{course_id}` | 删除课程 |
+| GET | `/api/v1/sessions` | 查询课堂会话列表 |
+| POST | `/api/v1/sessions` | 创建课堂会话 |
+| PUT | `/api/v1/sessions/{session_id}` | 更新课堂会话 |
+| DELETE | `/api/v1/sessions/{session_id}` | 删除课堂会话 |
+| POST | `/api/v1/sessions/{session_id}/schedule` | 安排用户进入课堂 |
+| DELETE | `/api/v1/sessions/{session_id}/schedule/{user_id}` | 取消课堂安排 |
+| POST | `/api/v1/emoji` | 提交一条 Emoji 记录 |
+| GET | `/api/v1/emoji/history` | 查询 Emoji 历史 |
+| GET | `/api/v1/emoji/statistics` | 按类型汇总统计 |
+
+统一响应格式为 `{code, msg, data}`，分页接口额外带 `total`、`page`、`page_size`。
+
+路由模块已在 `app/api/v1/courses/__init__.py`、`app/api/v1/sessions/__init__.py`、`app/api/v1/emoji/__init__.py` 中导出（自带前缀和 tags）。合并时在 `app/api/v1/__init__.py` 中注册即可：
+
+```python
+from .courses import courses_router
+from .emoji import emoji_router
+from .sessions import sessions_router
+
+v1_router.include_router(courses_router)
+v1_router.include_router(sessions_router)
+v1_router.include_router(emoji_router)
+```
+
+#### 请求/响应示例
+
+创建课程：
+
+```json
+POST /api/v1/courses
+Content-Type: application/json
+token: <登录后的 JWT>
+
+{
+  "name": "数据结构",
+  "teacher_id": 1,
+  "description": "计算机基础课"
+}
+```
+
+```json
+{
+  "code": 200,
+  "msg": "OK",
+  "data": {
+    "id": 1,
+    "name": "数据结构",
+    "teacher_id": 1,
+    "description": "计算机基础课",
+    "created_at": "2026-11-03 13:00:00",
+    "updated_at": "2026-11-03 13:00:00"
+  }
+}
+```
+
+创建课堂会话：
+
+```json
+POST /api/v1/sessions
+token: <登录后的 JWT>
+
+{
+  "course_id": 1,
+  "start_time": "2026-11-03T10:00:00",
+  "end_time": "2026-11-03T11:00:00",
+  "classroom": "A101",
+  "class_name": "计科2301"
+}
+```
+
+```json
+{
+  "code": 200,
+  "msg": "OK",
+  "data": {
+    "id": 1,
+    "course_id": 1,
+    "start_time": "2026-11-03 10:00:00",
+    "end_time": "2026-11-03 11:00:00",
+    "classroom": "A101",
+    "class_name": "计科2301",
+    "created_at": "2026-11-03 13:00:00",
+    "updated_at": "2026-11-03 13:00:00"
+  }
+}
+```
+
+安排学生进入课堂：
+
+```json
+POST /api/v1/sessions/1/schedule
+token: <登录后的 JWT>
+
+{
+  "user_id": 2
+}
+```
+
+提交手动 Emoji（学生必须已被安排进该课堂）：
+
+```json
+POST /api/v1/emoji
+token: <登录后的 JWT>
+
+{
+  "user_id": 2,
+  "session_id": 1,
+  "emoji_type": "HAPPY",
+  "source": "MANUAL"
+}
+```
+
+```json
+{
+  "code": 200,
+  "msg": "OK",
+  "data": {
+    "id": 1,
+    "user_id": 2,
+    "session_id": 1,
+    "emoji_type": "HAPPY",
+    "timestamp": "2026-11-03 13:05:00",
+    "source": "MANUAL",
+    "confidence": null,
+    "device_source": null
+  }
+}
+```
+
+提交 AI Emoji 的数据契约（由 `EmojiCreate` 校验：AI 记录必须带 `source=AI` 和 0~1 的 `confidence`，`user_id` 可省略）：
+
+```json
+{
+  "session_id": 1,
+  "emoji_type": "HAPPY",
+  "source": "AI",
+  "confidence": 0.88,
+  "device_source": "camera-01"
+}
+```
+
+AI 服务的专用入库接口为 `POST /api/v1/ai/emoji-results`（成员 D，使用独立 `AI_SERVICE_TOKEN`），不在 A 模块范围。
+
+查询课堂 Emoji 统计：
+
+```json
+GET /api/v1/emoji/statistics?session_id=1
+token: <登录后的 JWT>
+```
+
+```json
+{
+  "code": 200,
+  "msg": "OK",
+  "data": [
+    {"emoji_type": "HAPPY", "count": 2, "percentage": 66.67},
+    {"emoji_type": "NEUTRAL", "count": 1, "percentage": 33.33}
+  ]
+}
+```
+
+### 数据库初始化与迁移
+
+#### 方式一：MySQL（推荐用于联调/部署）
+
+1. 创建数据库（必须使用 `utf8mb4`，以支持中文和 Emoji）：
+
+```sql
+CREATE DATABASE emoji_classroom DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+```
+
+2. 执行建表脚本（MySQL 8.0.16 及以上，包含课程/课堂/排课/Emoji 业务表及认证、RBAC 前置表）：
+
+```sh
+mysql -u root -p emoji_classroom < database/mysql_schema.sql
+```
+
+3. 复制 `.env.example` 为 `.env`，修改数据库连接：
+
+```sh
+cp .env.example .env
+# 编辑 .env，设置 DB_ENGINE=mysql、MYSQL_HOST、MYSQL_PORT、MYSQL_USER、MYSQL_PASSWORD、MYSQL_DATABASE=emoji_classroom
+```
+
+4. 启动后应用会自动执行初始化（`init_db`），并在缺少角色/菜单/API 数据时补齐。
+
+#### 方式二：SQLite（本地快速验证）
+
+在 `.env` 中设置：
+
+```ini
+DB_ENGINE=sqlite
+```
+
+应用会使用 `db.sqlite3`。启动时 `init_db` 会通过 Aerich 执行 `migrations/` 下的迁移并升级。
+
+#### Aerich 迁移流程（模型变更后）
+
+```sh
+# 初始化（仅首次）
+aerich init -t app.settings.TORTOISE_ORM
+
+# 生成迁移文件并应用
+aerich migrate --name classroom_emotion_models
+aerich upgrade
+```
+
+注意：`migrations/` 目录中的历史迁移是 SQLite 方言 SQL；如果使用 MySQL，请直接执行 `database/mysql_schema.sql`，或在 MySQL 连接下用 Aerich 重新生成迁移。
+
+### 运行测试
+
+```sh
+# 安装测试依赖（已写入 requirements.txt / pyproject.toml）
+pip install -r requirements.txt
+
+# 运行 A 模块单元测试和接口测试
+pytest
+```
+
+测试说明：
+
+- `tests/test_classroom_schemas.py`：A 模块 Schema 单元测试，覆盖课程名称、课堂时间区间、手动/AI Emoji 的置信度约束。
+- `tests/test_classroom_api.py`：A 模块接口测试，覆盖课程增删查、课堂会话创建与时间校验、排课、手动 Emoji 提交、来源约束以及教师/学生数据归属校验。
+

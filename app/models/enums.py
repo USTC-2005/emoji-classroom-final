@@ -17,3 +17,20 @@ class MethodType(StrEnum):
     PUT = "PUT"
     DELETE = "DELETE"
     PATCH = "PATCH"
+
+
+class EmojiSource(StrEnum):
+    """情绪记录的产生方式。"""
+
+    MANUAL = "MANUAL"
+    AI = "AI"
+
+
+class EmojiType(StrEnum):
+    """系统支持的基础情绪类型。"""
+
+    HAPPY = "HAPPY"
+    SAD = "SAD"
+    ANGRY = "ANGRY"
+    SURPRISED = "SURPRISED"
+    NEUTRAL = "NEUTRAL"

@@ -1,3 +1,159 @@
-"""Emoji 提交、历史查询和入库控制器。"""
+"""Emoji 记录写入、历史查询和统计控制器。"""
 
-# TODO: 实现手动记录、AI 记录、个人历史和教师历史查询。
+from datetime import datetime
+
+from fastapi import HTTPException
+from tortoise.functions import Count
+
+from app.core.crud import CRUDBase
+from app.models.admin import User
+from app.models.classroom import ClassSession, EmojiRecord, ScheduleUser
+from app.models.enums import EmojiSource
+from app.schemas.emoji import EmojiCreate
+
+
+class EmojiController(CRUDBase[EmojiRecord, EmojiCreate, EmojiCreate]):
+    def __init__(self):
+        super().__init__(model=EmojiRecord)
+
+    async def _require_user(self, user_id: int) -> User:
+        user = await User.filter(id=user_id, is_active=True).first()
+        if user is None:
+            raise HTTPException(status_code=404, detail="User not found")
+        return user
+
+    async def _require_session(self, session_id: int) -> ClassSession:
+        session = await ClassSession.get_or_none(id=session_id).prefetch_related("course")
+        if session is None:
+            raise HTTPException(status_code=404, detail="Class session not found")
+        return session
+
+    async def create_record(self, obj_in: EmojiCreate, actor_id: int | None = None) -> EmojiRecord:
+        """写入记录并校验来源约束与用户归属。
+
+        AI 服务可以不提供 user_id，但必须提供 session_id 和置信度；普通用户
+        只能为自己写入手动记录。
+        """
+
+        values = obj_in.model_dump(exclude_unset=True)
+        user_id = values.get("user_id", actor_id)
+        session_id = values.get("session_id")
+        if user_id is not None:
+            values["user_id"] = user_id
+        session = await self._require_session(session_id)
+        if actor_id is not None:
+            actor = await self._require_user(actor_id)
+            if actor_id != user_id and not actor.is_superuser and actor_id != session.course.teacher_id:
+                raise HTTPException(status_code=403, detail="Cannot write a record for another user")
+            if actor_id == user_id and not actor.is_superuser and actor_id != session.course.teacher_id:
+                is_scheduled = await ScheduleUser.filter(session_id=session_id, user_id=actor_id).exists()
+                if not is_scheduled:
+                    raise HTTPException(status_code=403, detail="User is not scheduled for this classroom")
+        if user_id is not None:
+            await self._require_user(user_id)
+        if obj_in.source is EmojiSource.MANUAL and user_id is None:
+            raise HTTPException(status_code=422, detail="Manual records must be associated with a user")
+        if obj_in.source is EmojiSource.MANUAL and obj_in.confidence is not None:
+            raise HTTPException(status_code=422, detail="Manual records must not contain confidence")
+        if obj_in.source is EmojiSource.AI and obj_in.confidence is None:
+            raise HTTPException(status_code=422, detail="AI records require confidence")
+        return await self.model.create(**values)
+
+    async def get_user_history(
+        self,
+        user_id: int,
+        actor_id: int | None = None,
+        session_id: int | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        await self._require_user(user_id)
+        if actor_id is not None and actor_id != user_id:
+            actor = await self._require_user(actor_id)
+            if not actor.is_superuser:
+                if session_id is None:
+                    raise HTTPException(status_code=403, detail="Cannot view another user's history")
+                session = await self._require_session(session_id)
+                if session.course.teacher_id != actor_id:
+                    raise HTTPException(status_code=403, detail="Cannot view this classroom history")
+        if actor_id == user_id and session_id is not None:
+            actor = await self._require_user(actor_id)
+            session = await self._require_session(session_id)
+            if actor_id != session.course.teacher_id and not actor.is_superuser:
+                is_scheduled = await ScheduleUser.filter(session_id=session_id, user_id=user_id).exists()
+                if not is_scheduled:
+                    raise HTTPException(status_code=403, detail="User is not scheduled for this classroom")
+        filters = {"user_id": user_id}
+        if session_id is not None:
+            filters["session_id"] = session_id
+        if from_time is not None:
+            filters["timestamp__gte"] = from_time
+        if to_time is not None:
+            filters["timestamp__lte"] = to_time
+        query = self.model.filter(**filters).order_by("-timestamp")
+        total = await query.count()
+        records = await query.offset((page - 1) * page_size).limit(page_size)
+        return total, records
+
+    async def get_teacher_history(
+        self,
+        session_id: int,
+        teacher_id: int,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ):
+        session = await self._require_session(session_id)
+        if session.course.teacher_id != teacher_id:
+            raise HTTPException(status_code=403, detail="Class session does not belong to the teacher")
+        filters = {"session_id": session_id}
+        if from_time is not None:
+            filters["timestamp__gte"] = from_time
+        if to_time is not None:
+            filters["timestamp__lte"] = to_time
+        query = self.model.filter(**filters).order_by("-timestamp")
+        total = await query.count()
+        records = await query.offset((page - 1) * page_size).limit(page_size)
+        return total, records
+
+    async def statistics(
+        self,
+        session_id: int | None = None,
+        user_id: int | None = None,
+        from_time: datetime | None = None,
+        to_time: datetime | None = None,
+    ) -> list[dict]:
+        filters = {}
+        if session_id is not None:
+            filters["session_id"] = session_id
+        if user_id is not None:
+            filters["user_id"] = user_id
+        if from_time is not None:
+            filters["timestamp__gte"] = from_time
+        if to_time is not None:
+            filters["timestamp__lte"] = to_time
+        rows = (
+            await self.model.filter(**filters)
+            .annotate(count=Count("id"))
+            .group_by("emoji_type")
+            .values("emoji_type", "count")
+        )
+        total = sum(row["count"] for row in rows)
+        return [
+            {
+                "emoji_type": row["emoji_type"],
+                "count": row["count"],
+                "percentage": round(row["count"] * 100 / total, 2) if total else 0.0,
+            }
+            for row in rows
+        ]
+
+    # 兼容路由层常用的简短命名。
+    create_emoji = create_record
+    history = get_user_history
+
+
+emoji_controller = EmojiController()
